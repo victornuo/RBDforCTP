@@ -1,0 +1,16 @@
+// Enviando mensaje RBDReport (via CTP)
+  "RBDError[%d,%d]" , TOS_NODE_ID, ctp_m->nodeDest
+	
+// Cuando recibo RBD si es tras recuperar un ruta	
+sprintf(report,"RBD.RECOVER.%d,%d", rbd_m_rx->value, rbd_m_rx-> seqno);
+
+// Cuando recibo RBD si es envio normal	
+    sprintf(report,"RBD.OK.%d,%d,%d", rbd_m_rx->msgType, rbd_m_rx->value,  rbd_m_rx-> seqno);
+
+  //Report tras 100 CTPs enviados
+  
+  	sprintf(report,"REP.CTP.%d,%d",msgCTPOK,msgCTPError);
+
+	sprintf(report,"REP.RBD.%d,%d",msgRBDregular,msgRBDrecovery);
+
+	sprintf(report,"REP.FWD.%d,%d",msgFWDOK,msgFWDerror);

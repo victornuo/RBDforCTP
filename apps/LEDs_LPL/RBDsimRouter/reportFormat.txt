@@ -1,0 +1,6 @@
+//RBD Error (pushError =0, nodo en la tabla anteriormente)
+"DElIVERY_ERROR[%d;%d,%d,%d]\r\n", ctp_rx->msgType, ctp_rx->nodeID, ctp_rx->nodeDest,pushError
+
+// Report tras 100 RBD mensjaes enviados
+	sprintf(report,"REPORT.1.%d,%d,%d,%d",msgCounterSend,msgCounterOK,msgCounterError,noRouteCounter);
+	sprintf(report,"REPORT.2.%d,%d,%d,%d",	msgCounterSend,repeatedReport,recoveredRouteMsg,sendTaskSkip);

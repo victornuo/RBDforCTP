@@ -1,0 +1,98 @@
+#ifndef RBD_H
+#define RBD_H
+
+
+#include <AM.h>
+#define UQ_RBD_CLIENT "CtpSenderRbdSenderC.RoutebackId" 
+
+#ifndef RB_NO_ACK_BASE
+#define RB_NO_ACK_BASE 40
+#endif
+
+#ifndef RBD_TABLE_ELEMENTS
+#define RBD_TABLE_ELEMENTS 10
+#endif
+
+
+enum {
+    AM_RBD_DATA   = 0x73,
+    RBD_INVALID_ADDR  = TOS_BCAST_ADDR,
+}; 
+
+enum {
+
+#if PLATFORM_MICAZ || PLATFORM_TELOSA || PLATFORM_TELOSB || PLATFORM_TMOTE || PLATFORM_INTELMOTE2 || PLATFORM_SHIMMER || PLATFORM_IRIS
+  //RB_FORWARD_PACKET_TIME = 7,
+  RB_FORWARD_PACKET_TIME = 7,
+//RB_NO_ACK_DELAY = RB_NO_ACK_BASE,
+#else
+  RB_FORWARD_PACKET_TIME = 32,
+#endif
+};
+
+enum {
+  RB_SENDDONE_OK_OFFSET        = RB_FORWARD_PACKET_TIME,
+  RB_SENDDONE_OK_WINDOW        = RB_FORWARD_PACKET_TIME,
+  RB_SENDDONE_NOACK_OFFSET     = RB_NO_ACK_BASE,
+  RB_SENDDONE_NOACK_WINDOW     = RB_NO_ACK_BASE >> 1,
+  RB_SENDDONE_FAIL_OFFSET      = RB_FORWARD_PACKET_TIME  << 2,
+  RB_SENDDONE_FAIL_WINDOW      = RB_SENDDONE_FAIL_OFFSET,
+};
+
+
+/* 
+ * The number of times the ForwardingEngine will try to 
+ * transmit a packet before giving up if the link layer
+ * supports acknowledgments. If the link layer does
+ * not support acknowledgments it sends the packet once.
+ */
+enum {
+  RB_MAX_RETRIES = 30
+};
+
+typedef uint8_t routeback_id_t;
+typedef nx_uint8_t nx_routeback_id_t;
+
+
+
+typedef nx_struct {
+  nx_am_addr_t        destination;
+  nx_uint8_t          ttl;
+  nx_uint8_t          originSeqNo;
+  nx_routeback_id_t  type; 
+} routeback_header_t;
+
+typedef struct {
+  message_t * ONE_NOK msg;
+  uint8_t client;
+  uint8_t retries;
+} rb_queue_entry_t;
+
+/*
+ * neighbor: netx node in the path  
+ * routedMsg, times that a messagge was sent to the same destiantion
+ * hopCount, hops to reach the destination 
+ */
+typedef struct {
+  am_addr_t neighbor;
+  uint16_t routedMsgs;
+  uint8_t hopCount; 
+} routingback_info_t;
+
+/*
+ * destiantion: destiantion adddress of the route
+ * info: information neddes to handle the route
+ */
+typedef struct {
+  am_addr_t destination;
+  routingback_info_t info;
+} routingback_table_entry;
+
+
+inline void routeBackInfoInit(routingback_info_t *ri) {
+    ri->neighbor = RBD_INVALID_ADDR  ;
+    ri->hopCount = 0;
+    ri->routedMsgs = 0;
+}
+
+#endif

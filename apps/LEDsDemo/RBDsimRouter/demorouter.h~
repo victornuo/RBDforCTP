@@ -1,0 +1,19 @@
+#ifndef DEMO_ROUTER_H
+#define DEMO_ROUTER_H
+
+
+#ifndef MAX_NODES_RBD
+#define MAX_NODES_RBD 2
+#endif
+
+#ifndef RBD_MSG_PERIOD_BASE
+//#define RBD_MSG_PERIOD_BASE 60U
+#define RBD_MSG_PERIOD_BASE 60*1024U
+#endif
+
+typedef struct {
+  nx_am_addr_t nodeDest;
+  nx_uint8_t msgType;
+} rb_sendqueue;
+
+#endif

@@ -1,0 +1,46 @@
+#include <demoClient.h>
+configuration CollectionDemoClientAppC {}
+
+implementation
+{
+  enum {CTP_ID = 16, RBD_ID=17};
+  components MainC;
+  components ActiveMessageC;
+  components CollectionC;
+  components RoutebackC;
+  components new CtpSenderRbdReceiverC(CTP_ID,RBD_ID) as CtpRbd;
+  components new TimerMilliC() as TimerSend;
+  //components new TimerMilliC() as TimerLeds;
+  components CollectionDemoClientC;
+  components LedsC;
+  components SerialActiveMessageC;
+  components PrintfC;
+  
+  components RandomC;
+  
+  components CC2420ActiveMessageC as LplRadio;
+  CollectionDemoClientC.LowPowerListening -> LplRadio;
+
+  CollectionDemoClientC.Random -> RandomC;
+  CollectionDemoClientC.SerialControl -> SerialActiveMessageC;
+  CollectionDemoClientC.Boot -> MainC;
+  CollectionDemoClientC.RadioSplitControl -> ActiveMessageC;
+  CollectionDemoClientC.CollectionStdControl -> CollectionC;
+ // CollectionDemoClientC.ForwardError -> RoutebackC;
+  CollectionDemoClientC.RoutebackStdControl -> RoutebackC;
+  CollectionDemoClientC.RbdReceive-> CtpRbd.RbdReceive;
+  CollectionDemoClientC.CtpSend -> CtpRbd.CtpSend;
+  CollectionDemoClientC.SendT -> TimerSend;
+ // CollectionDemoClientC.LedsT -> TimerLeds;
+  CollectionDemoClientC.Leds-> LedsC;
+  CollectionDemoClientC.Packet_Rbd->CtpRbd.Packet_Rbd;
+  CollectionDemoClientC.RoutebackPacket -> RoutebackC.RoutebackPacket;
+  
+    /**
+     * Pa printfear desde la aplicacion principal
+     */
+  CollectionDemoClientC.DebugPrintf->RoutebackC.DebugPrintf;
+  components new PoolC(message_t, 10) as DebugMessagePool;
+  components new QueueC(message_t*, 10) as DebugSendQueue;
+
+}

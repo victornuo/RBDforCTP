@@ -1,0 +1,226 @@
+#include "printf.h"
+#include <demoClient.h>
+
+
+module CollectionDemoClientC
+{
+  uses {
+    interface Boot;
+    interface SplitControl as RadioSplitControl;
+    interface SplitControl as SerialControl;
+    interface StdControl as CollectionStdControl;
+    interface StdControl as RoutebackStdControl;
+    
+    interface Random;
+    
+    interface LowPowerListening;
+    
+    interface Send as CtpSend;
+    interface Receive as RbdReceive;
+    interface Packet as Packet_Rbd;
+    interface RoutebackPacket;
+   // interface ForwardError;
+    
+    
+    //interface Packet as Packet_Rbd;
+    interface Timer<TMilli> as SendT;
+   // interface Timer<TMilli> as LedsT;
+    interface Leds;
+    
+      /**
+     * Pa printfear desde la aplicacion principal
+     */
+     interface DebugPrintf;
+    }
+}
+
+implementation
+{
+    
+  uint16_t msgCTPOK;
+  uint16_t msgCTPError;
+  
+  uint16_t msgRBDregular;
+  uint16_t msgRBDrecovery;
+  uint16_t msgFWDerror;
+  uint16_t msgFWDOK;
+  uint16_t msgCounterSend;
+  
+    message_t ctpmsg;
+    message_t rbdmsg;
+    
+  
+        
+   typedef nx_struct {
+    nx_am_addr_t nodeID;
+    nx_am_addr_t nodeDest;
+    nx_uint16_t msgType;
+    nx_uint16_t value;
+    // counterlastOK
+  } ctp_p_t;
+  
+ typedef nx_struct {
+  nx_uint8_t msgType;
+  nx_uint8_t value;
+  nx_uint16_t seqno;
+ } rbd_p_t;
+    
+
+    
+    ctp_p_t *ctp_m;
+    rbd_p_t *rbd_m;
+    
+    char report[20];
+    
+    void dataCollectionReport(char* rep);
+    
+    event void Boot.booted ()
+    {
+      ctp_m = call CtpSend.getPayload (&ctpmsg, sizeof(ctp_p_t));
+      /*strcpy ((char*)name->string, "name");
+      name->counter = 1;
+       name = (name_t*)call RbdSend.getPayload (&rbdmsg, sizeof(name_t));*/
+      ctp_m->msgType=1;
+      ctp_m->nodeID=TOS_NODE_ID;
+      ctp_m->nodeDest=0;
+      ctp_m->value = 0;
+      //ctp_m->counterlastOK = 0;
+      msgCounterSend = 0;
+      msgCTPError = 0;
+      msgCTPOK = 0;
+      msgRBDregular = 0;
+      msgRBDrecovery = 0;
+      msgFWDerror = 0;
+      msgFWDOK = 0;
+      call SerialControl.start();
+  }
+  
+    event void SerialControl.startDone(error_t err) {
+      call RadioSplitControl.start();
+    }
+    
+    event void RadioSplitControl.startDone(error_t error)
+    {
+      uint16_t nextInt;
+      nextInt = call Random.rand16() % CTP_MSG_PERIOD_BASE;
+      nextInt = (nextInt + CTP_MSG_PERIOD_BASE)/2;
+      nextInt = nextInt + (CTP_MSG_PERIOD_BASE / 4);
+      call CollectionStdControl.start();
+      call RoutebackStdControl.start();
+      call SendT.startOneShot(nextInt);
+    }
+    
+    event void SendT.fired ()
+    {
+      uint16_t nextInt;
+      error_t error;
+      ctp_m -> msgType=1;
+      ctp_m -> value = msgCounterSend;
+      
+      dbg("TestNetworkC", "TestNetworkC: Timer fired.\n");
+      nextInt = call Random.rand16() % CTP_MSG_PERIOD_BASE;
+      nextInt = (nextInt + CTP_MSG_PERIOD_BASE)/2;
+      nextInt = nextInt + (CTP_MSG_PERIOD_BASE / 4);
+      // next int is CTP_MSG_PERIOD_BASE +/- (CTP_MSG_PERIOD_BASE/4)  
+      call SendT.startOneShot(nextInt);
+      //ctp_m->counterlastOK = msgCTPOK;
+      //call Leds.led2Toggle();
+      msgCounterSend ++;
+      error = call CtpSend.send (&ctpmsg, sizeof(ctp_p_t)); //uso un comando de la interface Send
+      if (msgCounterSend%200==0)
+      {
+	sprintf(report,"REP.CTP.%d,%d",msgCTPOK,msgCTPError);
+	dataCollectionReport(report);
+	sprintf(report,"REP.RBD.%d,%d",msgRBDregular,msgRBDrecovery);
+	dataCollectionReport(report);
+	sprintf(report,"REP.FWD.%d,%d",msgFWDOK,msgFWDerror);
+	dataCollectionReport(report);  
+      }
+     
+    }
+    
+    event void SerialControl.stopDone(error_t err) {}	
+    
+    
+    event message_t* RbdReceive.receive(message_t *msg, void *payload, uint8_t len)
+    {
+      rbd_p_t* rbd_m_rx;
+
+      
+      rbd_m_rx= call Packet_Rbd.getPayload(msg,sizeof(rbd_p_t));
+      //msgRXCounter ++;
+     
+      if (rbd_m_rx->msgType == 0)
+      {
+	
+	msgRBDrecovery ++;
+	
+	sprintf(report,"RBD.RECOVER:%d,%d", rbd_m_rx->value, rbd_m_rx-> seqno);
+	dataCollectionReport(report);
+
+      }
+      else
+      {
+	msgRBDregular ++;
+	sprintf(report,"RBD.OK.%d,%d,%d", rbd_m_rx->msgType, rbd_m_rx->value,  rbd_m_rx-> seqno);
+	dataCollectionReport(report);
+	//printfflush();
+	
+      }    
+      return msg;
+    }
+    
+   //event message_t* ForwardError.forwardingError(message_t* msg)
+   event message_t* RoutebackPacket.forwardingError(message_t* msg)
+   {
+      error_t error;
+      rbd_p_t* rbd_m_rx;
+      rbd_m_rx= call Packet_Rbd.getPayload(msg,sizeof(rbd_p_t));
+      
+      msgFWDerror ++;
+      ctp_m->msgType = 0;
+      ctp_m->nodeDest=call RoutebackPacket.getDestination(msg);
+      ctp_m->value = rbd_m_rx->value;
+      //ctp_m->counterlastOK = 0;
+      //call Leds.led2Toggle();
+     
+      error = call CtpSend.send (&ctpmsg, sizeof(ctp_p_t)); //uso un comando de la interface Send
+      sprintf (report,"ERROR.FWD.%d,%d" , TOS_NODE_ID, ctp_m->nodeDest);
+      dataCollectionReport(report);
+      return (msg);
+     
+    }
+          
+   event void CtpSend.sendDone (message_t* msg, error_t error) 
+   {
+     if (error == SUCCESS)
+     {
+       msgCTPOK ++;
+    
+     }
+     else
+     {
+	msgCTPError ++;
+     }//call Leds.led0Toggle();
+     
+  } 
+   event void DebugPrintf.debugPrintf (char *msg)
+   {
+     if ((msg[0]) == 'F')
+       msgFWDOK ++;
+       
+     dataCollectionReport(msg);
+    }
+  
+   void dataCollectionReport(char* rep)
+  {
+    printf("\nN%d:%s\n",TOS_NODE_ID,rep);
+     printfflush();
+     return;
+    
+  }
+  //implemento q hacer con el evento en respuesta (en este caso un mojon de ovispo)
+   
+   event void RadioSplitControl.stopDone (error_t error){}
+      
+}

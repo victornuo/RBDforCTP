@@ -1,0 +1,395 @@
+
+#include <Timer.h>
+#include "printf.h"
+#include <demorouter.h>
+
+//#include <Rbd.h>
+module CollectionRbdRouterC {
+  uses interface Boot;
+  uses interface SplitControl as RadioControl;
+  uses interface SplitControl as SerialControl;
+  uses interface StdControl as CollectionStdControl;
+  uses interface StdControl as RoutebackStdControl;
+  uses interface Send as RbdSend;
+  uses interface Queue<rb_sendqueue*> as SendQueue;
+  uses interface Leds;
+  uses interface Timer<TMilli>;
+  uses interface RootControl;
+  uses interface Receive as CtpReceive;;
+  //uses interface AMSend as UARTSend;
+  uses interface CollectionPacket;
+  uses interface CtpInfo;
+  uses interface CtpCongestion;
+  uses interface Random;
+  //uses interface Queue<message_t*>;
+ // uses interface Pool<message_t>;
+  uses interface AMPacket; //??
+  uses interface Packet as RadioPacket; //??
+  uses interface Packet as RbdPacket;
+  uses interface Packet as CtpPacket;
+  uses interface RoutebackPacket as Rbdmsg;
+  uses interface RoutebackTable;
+  uses interface DebugPrintf;
+  
+  uses interface LowPowerListening;
+     
+}
+implementation {
+  //task void uartEchoTask();
+  
+  message_t rbdmsg;
+  message_t ctpmsg;
+  message_t uartpacket;
+  message_t* recvPtr = &uartpacket;
+
+  
+  am_addr_t rbdError_nodeID[20]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+  uint8_t rbdError_Index=0;
+ 
+  uint8_t msglen;
+  bool sendBusy = FALSE;
+  bool uartbusy = FALSE;
+  bool firstCTP = FALSE;
+  uint8_t seqno;
+  //uint8_t i;
+  
+  uint16_t msgCounterOK;
+  uint16_t msgCounterError;
+  uint16_t msgCounterSend;
+  uint16_t recoveredRouteMsg;
+  uint16_t repeatedReport;
+  uint16_t fired_count;
+  uint16_t noRouteCounter;
+  uint16_t sendTaskSkip;
+  
+  char report[20];
+  
+
+  typedef nx_struct {
+    nx_am_addr_t nodeID;
+    nx_am_addr_t nodeDest;
+    nx_uint16_t msgType;
+    nx_uint16_t value;
+   // nx_uint16_t counterlastOK;
+  } ctp_p;
+  
+  typedef nx_struct {
+  nx_uint8_t msgType;
+  nx_uint8_t value;
+  nx_uint16_t seqno;
+ } rbd_p;
+
+  ctp_p *ctp_payload;
+  rbd_p *rbd_payload;
+  
+  rb_sendqueue queueElem;
+  rb_sendqueue *sendQ;
+  
+  nx_am_addr_t destinationAddress;
+
+
+  enum {
+    SEND_INTERVAL = RBD_MSG_PERIOD_BASE, INVALID_ADD = 0XFFFF //cambiado de 2*1024U a 512U
+  };
+  
+    
+  void dataCollectionReport(char *rep);
+  
+  task void sendMessage();
+    
+  event void Boot.booted() {
+    sendQ=&queueElem;
+    sendQ->msgType=0;
+    sendQ->nodeDest=0;
+    ctp_payload = (ctp_p*)call CtpPacket.getPayload (&ctpmsg, sizeof(ctp_p));
+    rbd_payload = (rbd_p*)call RbdSend.getPayload (&rbdmsg, sizeof(rbd_p));
+    rbd_payload->msgType = 0;
+    rbd_payload->seqno = 0;
+    msgCounterSend = 0;
+    msgCounterOK = 0;
+    msgCounterError = 0;
+    destinationAddress = 2;
+    repeatedReport = 0;
+    recoveredRouteMsg = 0;
+    fired_count = 0;
+    noRouteCounter = 0;
+    sendTaskSkip = 0;
+    call SerialControl.start();
+    
+    //call RadioControl.start();
+  }
+  
+  event void SerialControl.startDone(error_t err) {
+    call LowPowerListening.setLocalWakeupInterval(0);
+    call RadioControl.start();
+  }
+  
+  event void RadioControl.startDone(error_t err) {
+    if (err != SUCCESS) {
+      call RadioControl.start();
+    }
+    else {
+      //call LowPowerListening.setLocalWakeupInterval(0);
+      call CollectionStdControl.start();
+      call RoutebackStdControl.start();
+      call RootControl.setRoot();
+      seqno = 0;
+      
+      //call Timer.startOneShot(SEND_INTERVAL); moved to CTP IN
+    }
+  }
+
+  event void RadioControl.stopDone(error_t err) {}
+  event void SerialControl.stopDone(error_t err) {}	
+
+ // Add a node to the list of nodes which RBD messgage delivery fails and Error Report were received
+ uint8_t pushToErrorTable (am_addr_t destinationNoderAdd)
+ {
+  int i;
+  for (i = 0; i <20; i ++)
+  {
+    if (destinationNoderAdd == rbdError_nodeID[i]) 
+      return (0); // Node already in the table
+  } 
+
+  rbdError_nodeID[rbdError_Index] = destinationNoderAdd;
+  
+  do{
+    rbdError_Index ++; 
+    if (rbdError_Index == 20)
+      rbdError_Index = 0;
+  }while (rbdError_nodeID[rbdError_Index] != 0);
+  return (1); // Push OK
+ }
+ 
+ uint8_t pullFromErrorTable (am_addr_t destinationNoderAdd)
+ {
+  int i;
+  for (i = 0; i <20; i ++)
+  {
+    if (destinationNoderAdd == rbdError_nodeID[i])
+    {
+      rbdError_nodeID[i] = 0;
+      return (1); // Node pull OK
+    }
+  }
+  return (0); // Node not found;
+ }
+
+
+   
+  task void sendMessage() {
+      error_t error;
+      //rb_sendqueue * msgQueue
+      
+      
+      if (!call SendQueue.empty())
+      {
+	rb_sendqueue * msgQueue = call SendQueue.head(); 
+	//printf("\nDequeue[%d,%d]", msgQueue->nodeDest, msgQueue->msgType);
+	if (msgQueue->msgType==0)
+	{
+	  sprintf(report,"RECOVERY.%d", msgQueue->nodeDest);
+	  dataCollectionReport(report);
+	}
+	
+	if (msgQueue->msgType==2)
+	{
+	  sprintf(report,"RESEND.%d,%d", msgQueue->nodeDest, msgQueue->value);
+	  dataCollectionReport(report);
+	}
+	
+	
+	
+      //call RoutebackTable.hasRoute(msgQueue->nodeDest);
+      
+      if (call RoutebackTable.hasRoute(msgQueue->nodeDest)!= RBD_INVALID_ADDR)
+      {
+	rbd_payload->msgType=msgQueue->msgType;
+	rbd_payload->value=msgQueue->value;
+	rbd_payload->seqno = seqno;
+	//rbdmsg->message_t = msgCounterOK; 
+	call Rbdmsg.setDestination(&rbdmsg,msgQueue->nodeDest);
+	call Rbdmsg.setSequenceNumber(&rbdmsg,seqno); 
+	seqno++; 
+	 error = call RbdSend.send(&rbdmsg, sizeof(rbd_p));
+	 if (error != SUCCESS) 
+	 {
+	   sprintf(report,"SendFail");
+	   dataCollectionReport(report);
+	   //printfflush();
+	 }
+	 else {
+	   sprintf(report,"RBDSend.%d,H.%d",msgQueue->nodeDest,getHopCount(msgQueue->nodeDest));
+	   dataCollectionReport(report);
+	  sendBusy = TRUE;
+	  //name->counter ++;
+	  //dbg("TestNetworkC", "%s: Transmission succeeded.\n", __FUNCTION__);
+	  }
+	}
+	else
+	{
+	  
+	 sprintf(report,"NoRouteTo.%d", msgQueue->nodeDest);
+	 dataCollectionReport(report);
+	 noRouteCounter ++;
+	    
+	}
+	call SendQueue.dequeue();
+      }
+      else
+      {
+	sendTaskSkip ++;
+	
+      }
+      return;
+  }
+
+ 
+  event void Timer.fired() {
+    //uint32_t nextInt;
+    rb_sendqueue * msgQueue=sendQ;
+    
+    //dbg("TestNetworkC", "TestNetworkC: Timer fired.\n");
+  //  nextInt = call Random.rand16() % SEND_INTERVAL;
+   // nextInt += SEND_INTERVAL >> 1;
+    
+    call Timer.startOneShot(SEND_INTERVAL);
+    fired_count ++;
+    if (!sendBusy)
+    {
+      
+      printf("\nFIRED.%d(%d)\n",msgCounterSend%100,fired_count); 
+      printfflush();
+      fired_count = 0;
+      msgQueue->nodeDest=destinationAddress;
+      msgQueue->value = msgCounterSend+1;
+      msgQueue->msgType=1;
+      call SendQueue.enqueue(msgQueue);
+      post sendMessage();
+      if (msgCounterSend%100 == 0)
+      {
+	sprintf(report,"REPORT.1.%d,%d,%d,%d",
+			msgCounterSend,msgCounterOK,msgCounterError,noRouteCounter);
+	dataCollectionReport(report); 
+	sprintf(report,"REPORT.2.%d,%d,%d,%d",
+			msgCounterSend,repeatedReport,recoveredRouteMsg,sendTaskSkip);
+	dataCollectionReport(report); 
+	
+      }
+      
+      if (destinationAddress==MAX_NODES_RBD)
+	  destinationAddress=2;
+      else
+	  destinationAddress++;
+
+      //sendMessage();
+    }
+  }
+
+  event void RbdSend.sendDone(message_t* m, error_t err) {
+    rb_sendqueue * msgQueue=sendQ;
+    rbd_p * rbd_aux_p; 
+    if (err != SUCCESS) 
+    {
+      rbd_aux_p = call RbdPacket.getPayload (m, sizeof(rbd_p));
+      msgQueue->nodeDest=call Rbdmsg.getDestination(m);
+      msgQueue->value = rbd_aux_p->value;
+      msgQueue->msgType=2;
+      call SendQueue.enqueue(msgQueue);
+      sprintf(report,"ERROR.TX.%d",msgQueue->nodeDest);
+      dataCollectionReport (report);
+      //printfflush();
+      msgCounterError ++;
+      post sendMessage();
+
+    }
+    else{
+    
+      msgCounterOK ++;
+    }
+    msgCounterSend ++;  
+    sendBusy = FALSE;
+  }
+
+  event message_t* 
+  CtpReceive.receive(message_t* msg, void* payload, uint8_t len) {
+    
+    ctp_p *ctp_rx;
+    error_t error;
+    uint8_t push2List;
+    rb_sendqueue * msgQueue=sendQ;
+   
+    
+    if (firstCTP == FALSE){
+      dataCollectionReport("START");
+      firstCTP=TRUE;
+      call Timer.startOneShot(SEND_INTERVAL);// moved from  Serial.Control.startDone
+    }
+    
+    error = call RoutebackTable.routingTableUpdate(msg);
+    if (error == FALSE)
+    {
+        
+      dataCollectionReport ("E_TAB_UPDT");
+      //call Leds.led2On();
+    }
+
+    ctp_rx= call CtpPacket.getPayload(msg,sizeof(ctp_p));
+
+    
+    if (ctp_rx->msgType == 0)
+    { 
+      
+      push2List=pushToErrorTable(ctp_rx->nodeDest); //0 node in table, 1 node added
+      // if node in list alredy increment repeated error counter
+      if (!push2List)
+	repeatedReport ++;
+      
+      sprintf(report,"E_REPORT.%d,%d,%d", ctp_rx->nodeID, ctp_rx->nodeDest,push2List);
+      dataCollectionReport (report);
+      
+    }
+    else
+    { 
+
+      if (pullFromErrorTable(ctp_rx->nodeID)==1)
+      { 
+	//hay q definir q mensaje se envia y esas cosas.
+	msgQueue->nodeDest=ctp_rx->nodeDest;
+	msgQueue->msgType=0;
+	msgQueue->value=0;
+	recoveredRouteMsg ++;
+	call SendQueue.enqueue(msgQueue);
+	dataCollectionReport("RECOVERED");
+	post sendMessage();
+      }
+     }
+      
+    return msg;
+ }
+
+  event void DebugPrintf.debugPrintf(char *msg)
+  {
+    
+    dataCollectionReport(msg);
+    return;
+  }
+  
+  //Cuando el error viene de la radio (no de la interfaz RBD el error se reporta por Rbdmsginterface.
+  event message_t* Rbdmsg.forwardingError(message_t* msg) 
+  {
+    msgCounterError ++;
+    return msg;
+    
+  }
+  
+  void dataCollectionReport(char* rep)
+  {
+    printf("\nROOT;%s\n", rep);
+    printfflush();
+    
+  }
+  
+
+} 

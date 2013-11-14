@@ -1,0 +1,80 @@
+#include "printf.h"
+
+module CollectionDemoClientC
+{
+  uses {
+    interface Boot;
+    interface SplitControl as RadioSplitControl;
+    interface StdControl as CollectionStdControl;
+    interface StdControl as RoutebackStdControl;
+    interface Send as CtpSend;
+    interface Receive as RbdReceive;
+    interface Packet as Packet_Rbd;
+    //interface Packet as Packet_Rbd;
+    interface Timer<TMilli> as SendT;
+    interface Timer<TMilli> as LedsT;
+    interface Leds;
+    }
+}
+
+implementation
+{
+    message_t ctpmsg;
+    message_t rbdmsg;
+    
+    typedef nx_struct {
+      nx_uint8_t string[8];
+      nx_uint16_t counter;
+    } name_t;
+    
+    name_t *name;
+    
+    event void Boot.booted ()
+    {
+      name = call CtpSend.getPayload (&ctpmsg, sizeof(name_t));
+      strcpy ((char*)name->string, "name");
+      name->counter = 0;
+      call RadioSplitControl.start();
+    }
+    
+    event void RadioSplitControl.startDone(error_t error)
+    {
+      call CollectionStdControl.start();
+      call RoutebackStdControl.start();
+      call SendT.startPeriodic(1024);
+    }
+    
+    event void SendT.fired ()
+    {
+      error_t error;
+      name -> counter++;
+      error = call CtpSend.send (&ctpmsg, sizeof(name_t)); //uso un comando de la interface Send
+      printf ("S: %d %d\n" , name->counter, error);
+      printfflush();
+    }
+    
+    event void LedsT.fired ()
+    {
+      call Leds.led0Off();
+    }
+    
+    event message_t* RbdReceive.receive(message_t *msg, void *payload, uint8_t len)
+    {
+      if (len==sizeof(name_t))
+      {
+	call Leds.led1Off();
+	call Leds.led0On();
+	call LedsT.startOneShot(500);
+      }
+      else
+      {
+	call Leds.led1On();
+	
+      }
+    } 
+     
+      
+   event void CtpSend.sendDone (message_t* msg, error_t error) {} //implemento q hacer con el evento en respuesta (en este caso un mojon de ovispo)
+    event void RadioSplitControl.stopDone (error_t error){}
+      
+}

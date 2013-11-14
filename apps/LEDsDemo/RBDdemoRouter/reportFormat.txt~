@@ -1,0 +1,5 @@
+//RBD Error (pushError =0, nodo en la tabla anteriormente)
+"DElIVERY_ERROR[%d;%d,%d,%d]\r\n", ctp_rx->msgType, ctp_rx->nodeID, ctp_rx->nodeDest,pushError
+
+// Report tras 100 RBD mensjaes enviados
+"Report[%d,%d,%d,%d,%d]",msgCounterSend,msgCounterOK, msgCounterError,repeatedReport, recoveredRouteMsg
